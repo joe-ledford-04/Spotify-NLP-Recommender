@@ -63,6 +63,9 @@ def preprocess(lyrics_path: str, output_path: str) -> pd.DataFrame:
     # drop exact duplicates in processed lyrics 
     lyrics_df = lyrics_df.drop_duplicates(subset=['processed_lyrics'])
 
+    lyrics_df["token_count"] = lyrics_df["processed_lyrics"].apply(lambda x: len(x.split()))
+    lyrics_df = lyrics_df[lyrics_df["token_count"] >= 50]  
+
 
     lyrics_df = lyrics_df.reset_index(drop=True)
     lyrics_df.to_csv(output_path, index=False)
