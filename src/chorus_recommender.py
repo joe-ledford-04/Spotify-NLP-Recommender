@@ -33,7 +33,7 @@ def recommend_songs(lyrics_df, similarity_matrix,
     ranked = scores.argsort()[::-1]
     ranked = [i for i in ranked if i != seed_idx][:k]
 
-    recs = lyrics_df.iloc[ranked][["track_name", "artist", "chorus_fallback"]].copy()
+    recs = lyrics_df.iloc[ranked][["track_name", "artist"]].copy()
     recs["similarity"] = scores[ranked]
     recs = recs.reset_index(drop=True)
     return recs

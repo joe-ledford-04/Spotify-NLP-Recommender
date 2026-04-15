@@ -10,8 +10,36 @@ nltk.download("omw-1.4", quiet=True)
 SECTION_PATTERN = re.compile(r'\[([^\]]+)\]')
 CHORUS_LABELS = {"chorus", "hook", "refrain"}
 
+PROSE_SIGNALS = re.compile(
+    r'according to|in an interview|told reporters|press release|announced that'
+    r'|the new york times|rolling stone|honorable mention|on this track'
+    r'|produced by|sample from|interpolates|genius annotation|this song'
+    r'|the music video|feat\.'
+    r'|\(\d+p\)|semi.?final|grand final'
+    r'|applause|laughter|thank you all|class of \d{4}'
+    r'|said to me|chapter \d|he said\b|she said\b|replied\b|murmured\b',
+    re.IGNORECASE
+)
+
+METADATA_WORDS = re.compile(
+    r'discogs|bootleg|remaster|deluxe edition|track listing|work in progress'
+    r'|genius japan|genius annotation|translated by|translation by'
+    r'|\bproducer\b|\balbum:\b|\blabel:\b|\brelease date\b',
+    re.IGNORECASE
+)
+
+def is_likely_lyrics(raw_text):
+    if PROSE_SIGNALS.search(raw_text):
+        return False
+    words = re.findall(r'[a-zA-Z]+', raw_text.lower())[:200]
+    if len(words) >= 100:
+        ttr = len(set(words)) / len(words)
+        if ttr > 0.85:
+            return False
+    return True
+
 def extract_sections(raw_lyrics):
-    sections: dict[str, list[str]] = {}
+    sections = {}
     current_label = None
     current_lines = []
 
@@ -47,13 +75,7 @@ def get_chorus_text(raw_lyrics):
         if any(kw in label for kw in CHORUS_LABELS):
             chorus_blocks.extend(blocks)
 
-    if chorus_blocks:
-        return "\n".join(chorus_blocks), False
-
-    # Fallback: no chorus tag found — return full lyrics (minus headers)
-    full_text = SECTION_PATTERN.sub('', raw_lyrics)
-    full_text = re.sub(r'\n{2,}', '\n', full_text).strip()
-    return (full_text if full_text else None), True
+    return "\n".join(chorus_blocks) if chorus_blocks else None
 
 def clean_text(text):
     text = text.lower()
@@ -76,47 +98,47 @@ def preprocess_chorus(raw_lyrics_path, output_path):
     df = df.dropna(subset=["lyrics"])
     df = df.drop_duplicates(subset=["track_name", "artist"])
 
-    chorus_texts   = []
-    processed      = []
-    fallback_flags = []
+    df = df[~df['lyrics'].str.contains(METADATA_WORDS, na=False)]
+    before = len(df)
+    df = df[df['lyrics'].apply(is_likely_lyrics)]
+    prose_dropped = before - len(df)
+    print(f"Dropped {prose_dropped} songs flagged as prose/annotation content")
 
-    for _, row in df.iterrows():
-        raw = str(row["lyrics"])
-        chorus_raw, is_fallback = get_chorus_text(raw)
+    chorus_texts = []
+    processed    = []
+    keep_indices = []
+
+    for idx, row in df.iterrows():
+        chorus_raw = get_chorus_text(str(row["lyrics"]))
 
         if chorus_raw is None:
-            chorus_texts.append(None)
-            processed.append(None)
-            fallback_flags.append(True)
-            continue
+            continue                     
 
         cleaned = clean_text(chorus_raw)
+        if not cleaned.strip():
+            continue                   
+
         chorus_texts.append(chorus_raw)
         processed.append(cleaned)
-        fallback_flags.append(is_fallback)
+        keep_indices.append(idx)
 
-    df = df.copy()
+    df = df.loc[keep_indices].copy()
     df["chorus_text"]      = chorus_texts
     df["processed_chorus"] = processed
-    df["chorus_fallback"]  = fallback_flags
 
-    df = df[df["processed_chorus"].notna()]
-    df = df[df["processed_chorus"].str.strip() != ""]
-
+    # Token floor — lower than full lyric floor since choruses are short
     df["token_count"] = df["processed_chorus"].apply(lambda x: len(x.split()))
-    df = df[df["token_count"] >= 10]   # chorus floor is lower than full-lyric floor
-
+    df = df[df["token_count"] >= 10]
     df = df.reset_index(drop=True)
 
-    # Fallback rate
-    n_total    = len(df)
-    n_fallback = df["chorus_fallback"].sum()
-    n_chorus   = n_total - n_fallback
-    print(f"Songs with chorus tag:    {n_chorus}/{n_total} ({n_chorus/n_total:.1%})")
-    print(f"Songs using fallback:     {n_fallback}/{n_total} ({n_fallback/n_total:.1%})")
+    n_original = len(pd.read_csv(raw_lyrics_path).dropna(subset=["lyrics"]))
+    n_kept     = len(df)
+    n_skipped  = n_original - n_kept
+    print(f"Songs kept (chorus found):  {n_kept}/{n_original} ({n_kept/n_original:.1%})")
+    print(f"Songs skipped (no chorus):  {n_skipped}/{n_original} ({n_skipped/n_original:.1%})")
+    print(f"Saved {n_kept} songs to {output_path}")
 
     df.to_csv(output_path, index=False)
-    print(f"Saved to {output_path}")
     return df
 
 
